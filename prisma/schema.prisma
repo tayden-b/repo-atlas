@@ -1,0 +1,56 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model RepoAnalysis {
+  id            String   @id @default(uuid())
+  repoUrl       String
+  owner         String
+  name          String
+  defaultBranch String
+  description   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // JSON fields for aggregated stats to avoid expensive queries on read
+  overviewStats String // LOC, file count, layer distribution
+  layerStats    String // Per-layer summary
+  
+  files         FileIndex[]
+  modules       ModuleIndex[]
+}
+
+model FileIndex {
+  id          String       @id @default(uuid())
+  path        String
+  extension   String
+  loc         Int
+  churnScore  Int          @default(0) // Normalized 0-100 or raw count
+  layer       String       // Enum: UI, API, DOMAIN, DATA, INTEGRATIONS, OPS, TESTS, SHARED
+  confidence  Float        // 0.0 - 1.0
+  signals     String       // JSON: List of matched rules/reasons
+  moduleName  String?      // Inferred top-level module
+  subcategory String?      // e.g., "Controller", "Service"
+  
+  repoId      String
+  repo        RepoAnalysis @relation(fields: [repoId], references: [id])
+
+  @@index([repoId, layer])
+}
+
+model ModuleIndex {
+  id          String       @id @default(uuid())
+  name        String
+  layer       String
+  loc         Int
+  churnAvg    Float
+  confidenceAvg Float
+  
+  repoId      String
+  repo        RepoAnalysis @relation(fields: [repoId], references: [id])
+}
