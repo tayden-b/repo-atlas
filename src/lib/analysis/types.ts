@@ -6,6 +6,15 @@ export enum Layer {
     TOOLING = "TOOLING"
 }
 
+// Raw stats for one file, before classification.
+export interface RawFileStats {
+    path: string;
+    loc: number;
+    extension: string;
+    /** first ~50 lines, used by CONTENT rules */
+    snippet: string;
+}
+
 export interface FileSignal {
     rule: string;
     strength: number; // 0-1
@@ -16,7 +25,6 @@ export interface FileAnalysisResult {
     path: string;
     extension: string;
     loc: number;
-    churn: number;
     layer: Layer;
     subcategory?: string;
     confidence: number;

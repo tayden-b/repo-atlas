@@ -59,6 +59,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         });
 
     } catch (error) {
+        console.error(`${req.nextUrl.pathname} failed:`, error);
         return new NextResponse("Failed to generate report", { status: 500 });
     }
 }

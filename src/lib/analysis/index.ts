@@ -4,8 +4,9 @@ import { Layer } from "./types";
 import { prisma } from "../prisma";
 
 export async function analyzeRepository(repoUrl: string) {
-    // 1. Fetch files from GitHub API
-    const { files: rawFiles, owner, repo: repoName, defaultBranch, description } = await fetchRepoFiles(repoUrl);
+    // 1. Fetch files from GitHub (repo metadata + one tarball request)
+    const { files: rawFiles, owner, repo: repoName, defaultBranch, description, truncated } =
+        await fetchRepoFiles(repoUrl);
 
     // 2. Classify (Layer, Confidence)
     const analyzedFiles = rawFiles.map(file => classifyFile(file));
@@ -22,17 +23,29 @@ export async function analyzeRepository(repoUrl: string) {
         totalLoc += f.loc;
     });
 
-    // 4. Save to DB
+    // 4. Save to DB. Re-analyzing a repo replaces its previous analysis
+    // instead of stacking duplicates.
+    const canonicalUrl = `https://github.com/${owner}/${repoName}`;
+    const existing = await prisma.repoAnalysis.findFirst({ where: { repoUrl: canonicalUrl } });
+    if (existing) {
+        await prisma.$transaction([
+            prisma.fileIndex.deleteMany({ where: { repoId: existing.id } }),
+            prisma.moduleIndex.deleteMany({ where: { repoId: existing.id } }),
+            prisma.repoAnalysis.delete({ where: { id: existing.id } }),
+        ]);
+    }
+
     const repo = await prisma.repoAnalysis.create({
         data: {
-            repoUrl,
+            repoUrl: canonicalUrl,
             owner,
             name: repoName,
             defaultBranch,
             description,
             overviewStats: JSON.stringify({
                 totalFiles: analyzedFiles.length,
-                totalLoc
+                totalLoc,
+                truncated
             }),
             layerStats: JSON.stringify(layerStats),
             files: {
@@ -40,7 +53,6 @@ export async function analyzeRepository(repoUrl: string) {
                     path: f.path,
                     extension: f.extension,
                     loc: f.loc,
-                    churnScore: f.churn,
                     layer: f.layer,
                     confidence: f.confidence,
                     signals: JSON.stringify(f.signals),
@@ -52,15 +64,15 @@ export async function analyzeRepository(repoUrl: string) {
     });
 
     // 5. Aggregate Modules
-    const moduleMap = new Map<string, { loc: number; churnSum: number; count: number; layers: Record<string, number> }>();
+    const moduleMap = new Map<string, { loc: number; confidenceSum: number; count: number; layers: Record<string, number> }>();
 
     for (const f of analyzedFiles) {
         if (!moduleMap.has(f.module)) {
-            moduleMap.set(f.module, { loc: 0, churnSum: 0, count: 0, layers: {} });
+            moduleMap.set(f.module, { loc: 0, confidenceSum: 0, count: 0, layers: {} });
         }
         const m = moduleMap.get(f.module)!;
         m.loc += f.loc;
-        m.churnSum += f.churn;
+        m.confidenceSum += f.confidence;
         m.count++;
         m.layers[f.layer] = (m.layers[f.layer] || 0) + 1;
     }
@@ -81,8 +93,7 @@ export async function analyzeRepository(repoUrl: string) {
             name,
             layer: domLayer,
             loc: stats.loc,
-            churnAvg: stats.count > 0 ? stats.churnSum / stats.count : 0,
-            confidenceAvg: 0.8
+            confidenceAvg: stats.count > 0 ? stats.confidenceSum / stats.count : 0
         });
     }
 

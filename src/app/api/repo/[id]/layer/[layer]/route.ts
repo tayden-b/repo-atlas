@@ -20,6 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
         return NextResponse.json(files);
     } catch (error) {
+        console.error(`${req.nextUrl.pathname} failed:`, error);
         return NextResponse.json({ error: "Failed to fetch files" }, { status: 500 });
     }
 }

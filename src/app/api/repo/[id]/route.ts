@@ -18,6 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
         return NextResponse.json(repo);
     } catch (error) {
+        console.error(`${req.nextUrl.pathname} failed:`, error);
         return NextResponse.json({ error: "Failed to fetch repo" }, { status: 500 });
     }
 }

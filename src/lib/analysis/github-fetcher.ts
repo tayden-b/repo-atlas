@@ -1,15 +1,26 @@
 import { Octokit } from "@octokit/rest";
-import { RawFileStats } from "./scanner";
+import { gunzipSync } from "zlib";
+import { RawFileStats } from "./types";
+
+// The whole repo comes down as one tarball request instead of one API call
+// per file. That keeps an analysis inside two GitHub requests total (repo
+// metadata + archive), which survives serverless timeouts and barely dents
+// the unauthenticated rate limit.
+
+const MAX_FILES = 2000;
+const MAX_FILE_BYTES = 200 * 1024; // skip generated bundles / vendored blobs
+const MAX_TARBALL_BYTES = 80 * 1024 * 1024;
 
 const octokit = new Octokit({
-    auth: process.env.GITHUB_TOKEN, // Optional: increases rate limit
+    auth: process.env.GITHUB_TOKEN, // optional: raises the rate limit
 });
 
-interface GitHubFile {
-    path: string;
-    type: string;
-    size: number;
-    sha: string;
+export function parseGitHubUrl(repoUrl: string): { owner: string; repo: string } | null {
+    const match = repoUrl
+        .trim()
+        .match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+    if (!match) return null;
+    return { owner: match[1], repo: match[2] };
 }
 
 export async function fetchRepoFiles(repoUrl: string): Promise<{
@@ -18,99 +29,89 @@ export async function fetchRepoFiles(repoUrl: string): Promise<{
     repo: string;
     defaultBranch: string;
     description: string;
+    truncated: boolean;
 }> {
-    // Parse GitHub URL
-    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-    if (!match) {
-        throw new Error("Invalid GitHub URL");
-    }
+    const parsed = parseGitHubUrl(repoUrl);
+    if (!parsed) throw new Error("Not a valid GitHub repository URL");
+    const { owner, repo } = parsed;
 
-    const [, owner, repoName] = match;
-    const repo = repoName.replace(/\.git$/, "");
-
-    // Get repository info
-    const { data: repoData } = await octokit.repos.get({
-        owner,
-        repo,
-    });
-
+    const { data: repoData } = await octokit.repos.get({ owner, repo });
     const defaultBranch = repoData.default_branch;
     const description = repoData.description || "No description available.";
 
-    // Get repository tree (all files)
-    const { data: treeData } = await octokit.git.getTree({
+    const { data: archive } = await octokit.repos.downloadTarballArchive({
         owner,
         repo,
-        tree_sha: defaultBranch,
-        recursive: "true",
+        ref: defaultBranch,
     });
 
-    // Filter to only files (not directories)
-    const fileEntries = (treeData.tree as GitHubFile[]).filter(
-        (item) => item.type === "blob" && !isBinary(item.path)
-    );
+    const compressed = Buffer.from(archive as ArrayBuffer);
+    if (compressed.byteLength > MAX_TARBALL_BYTES) {
+        throw new Error("Repository archive is too large to analyze (>80MB compressed)");
+    }
+    const tar = gunzipSync(compressed);
 
-    // Limit to first 500 files to avoid rate limits and timeouts
-    const limitedFiles = fileEntries.slice(0, 500);
-
-    // Fetch file contents and analyze
     const files: RawFileStats[] = [];
+    let truncated = false;
 
-    for (const file of limitedFiles) {
-        try {
-            // Fetch file content
-            const { data: contentData } = await octokit.repos.getContent({
-                owner,
-                repo,
-                path: file.path,
-                ref: defaultBranch,
-            });
+    // Plain ustar walk: 512-byte headers, file data padded to 512-byte blocks.
+    let offset = 0;
+    while (offset + 512 <= tar.length) {
+        const header = tar.subarray(offset, offset + 512);
+        if (header[0] === 0) break; // two zero blocks mark the end
 
-            if ("content" in contentData && contentData.content) {
-                const content = Buffer.from(contentData.content, "base64").toString("utf-8");
-                const lines = content.split("\n");
-                const loc = lines.length;
-                const snippet = lines.slice(0, 50).join("\n");
+        const name = readTarString(header, 0, 100);
+        const prefix = readTarString(header, 345, 155);
+        const size = parseInt(readTarString(header, 124, 12), 8) || 0;
+        const typeflag = String.fromCharCode(header[156]);
+        const dataStart = offset + 512;
+        offset = dataStart + Math.ceil(size / 512) * 512;
 
-                const extension = getExtension(file.path);
-
-                files.push({
-                    path: file.path,
-                    loc,
-                    churn: 0, // GitHub API doesn't provide churn easily
-                    extension,
-                    snippet,
-                });
-            }
-        } catch (error) {
-            // Skip files that can't be fetched (too large, binary, etc.)
-            console.warn(`Skipping file ${file.path}:`, error);
-            continue;
+        if (typeflag !== "0" && typeflag !== "\0") continue; // dirs, symlinks, pax headers
+        // strip the leading "owner-repo-sha/" segment GitHub adds
+        const fullName = prefix ? `${prefix}/${name}` : name;
+        const path = fullName.split("/").slice(1).join("/");
+        if (!path || isBinaryPath(path) || size === 0 || size > MAX_FILE_BYTES) continue;
+        if (files.length >= MAX_FILES) {
+            truncated = true;
+            break;
         }
+
+        const content = tar.subarray(dataStart, dataStart + size);
+        if (content.includes(0)) continue; // binary content without a known extension
+        const text = content.toString("utf-8");
+        const lines = text.split("\n");
+
+        files.push({
+            path,
+            loc: lines.length,
+            extension: getExtension(path),
+            snippet: lines.slice(0, 50).join("\n"),
+        });
     }
 
-    return {
-        files,
-        owner,
-        repo,
-        defaultBranch,
-        description,
-    };
+    return { files, owner, repo, defaultBranch, description, truncated };
+}
+
+function readTarString(buf: Buffer, start: number, length: number): string {
+    const slice = buf.subarray(start, start + length);
+    const end = slice.indexOf(0);
+    return slice.subarray(0, end === -1 ? length : end).toString("utf-8").trim();
 }
 
 function getExtension(filePath: string): string {
-    const parts = filePath.split(".");
-    return parts.length > 1 ? `.${parts[parts.length - 1].toLowerCase()}` : "";
+    const base = filePath.split("/").pop() ?? "";
+    const dot = base.lastIndexOf(".");
+    return dot > 0 ? base.slice(dot).toLowerCase() : "";
 }
 
-function isBinary(filePath: string): boolean {
-    const binaryExtensions = [
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
-        ".pdf", ".zip", ".tar", ".gz", ".exe", ".dll",
-        ".so", ".dylib", ".woff", ".woff2", ".ttf", ".eot",
-        ".mp4", ".mp3", ".wav", ".avi", ".mov",
-    ];
+const BINARY_EXTENSIONS = new Set([
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
+    ".pdf", ".zip", ".tar", ".gz", ".exe", ".dll", ".bin", ".wasm",
+    ".so", ".dylib", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".mp4", ".mp3", ".wav", ".avi", ".mov", ".lock",
+]);
 
-    const ext = getExtension(filePath);
-    return binaryExtensions.includes(ext);
+function isBinaryPath(filePath: string): boolean {
+    return BINARY_EXTENSIONS.has(getExtension(filePath));
 }

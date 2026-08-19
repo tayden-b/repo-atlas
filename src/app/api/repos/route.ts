@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
@@ -18,6 +18,7 @@ export async function GET() {
 
         return NextResponse.json(repos);
     } catch (error) {
+        console.error("GET /api/repos failed:", error);
         return NextResponse.json({ error: "Failed to fetch repos" }, { status: 500 });
     }
 }

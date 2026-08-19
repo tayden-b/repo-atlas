@@ -1,5 +1,4 @@
-import { Layer, FileAnalysisResult, FileSignal } from "./types";
-import { RawFileStats } from "./scanner";
+import { Layer, FileAnalysisResult, FileSignal, RawFileStats } from "./types";
 import path from "path";
 
 interface Rule {
@@ -188,7 +187,6 @@ export function classifyFile(file: RawFileStats): FileAnalysisResult {
         path: file.path,
         extension: file.extension,
         loc: file.loc,
-        churn: file.churn,
         layer: bestLayer,
         subcategory: bestSubcat,
         confidence,

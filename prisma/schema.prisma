@@ -10,7 +10,7 @@ generator client {
 
 model RepoAnalysis {
   id            String   @id @default(uuid())
-  repoUrl       String
+  repoUrl       String   @unique
   owner         String
   name          String
   defaultBranch String
@@ -31,8 +31,7 @@ model FileIndex {
   path        String
   extension   String
   loc         Int
-  churnScore  Int          @default(0) // Normalized 0-100 or raw count
-  layer       String       // Enum: UI, API, DOMAIN, DATA, INTEGRATIONS, OPS, TESTS, SHARED
+  layer       String       // Layer enum: PRESENTATION, APPLICATION, DOMAIN, INFRASTRUCTURE, TOOLING
   confidence  Float        // 0.0 - 1.0
   signals     String       // JSON: List of matched rules/reasons
   moduleName  String?      // Inferred top-level module
@@ -49,7 +48,6 @@ model ModuleIndex {
   name        String
   layer       String
   loc         Int
-  churnAvg    Float
   confidenceAvg Float
   
   repoId      String
