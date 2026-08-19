@@ -1,116 +1,97 @@
 "use client";
 
-import { Layer } from "@/lib/analysis/types";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
-import { ChevronRight, Layers, FileCode } from "lucide-react";
-import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronRight } from "lucide-react";
+import { Layer } from "@/lib/analysis/types";
+import { LAYER_ORDER, LAYER_META } from "@/lib/layers";
 
-// Stats match DB JSON structure
 interface LayerStats {
-    count: number;
-    loc: number;
+  count: number;
+  loc: number;
 }
 
 interface ModuleData {
-    id: string;
-    name: string;
-    layer: Layer;
-    loc: number;
-    churnAvg: number;
+  id: string;
+  name: string;
+  layer: string;
+  loc: number;
+  confidenceAvg: number;
 }
 
 interface LayerStackProps {
-    repoId: string;
-    stats: Record<Layer, LayerStats>;
-    modules: ModuleData[];
+  repoId: string;
+  stats: Record<Layer, LayerStats>;
+  modules: ModuleData[];
 }
 
-const LAYER_ORDER = [
-    Layer.PRESENTATION,
-    Layer.APPLICATION,
-    Layer.DOMAIN,
-    Layer.INFRASTRUCTURE,
-    Layer.TOOLING,
-];
-
-const LAYER_COLORS: Record<Layer, string> = {
-    [Layer.PRESENTATION]: "bg-blue-100 dark:bg-blue-900 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200",
-    [Layer.APPLICATION]: "bg-purple-100 dark:bg-purple-900 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-200",
-    [Layer.DOMAIN]: "bg-emerald-100 dark:bg-emerald-900 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200",
-    [Layer.INFRASTRUCTURE]: "bg-amber-100 dark:bg-amber-900 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200",
-    [Layer.TOOLING]: "bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200",
-};
-
 export function LayerStack({ repoId, stats, modules }: LayerStackProps) {
-    const router = useRouter();
-    const [expandedLayer, setExpandedLayer] = useState<Layer | null>(null);
+  const router = useRouter();
+  const totalLoc = LAYER_ORDER.reduce((sum, l) => sum + (stats[l]?.loc ?? 0), 0);
 
-    const handleLayerClick = (layer: Layer) => {
-        router.push(`/repo/${repoId}/layer/${layer.toLowerCase()}`);
-    };
+  return (
+    <div className="space-y-2">
+      {LAYER_ORDER.map((layer) => {
+        const layerStat = stats[layer] || { count: 0, loc: 0 };
+        const meta = LAYER_META[layer];
+        const layerModules = modules
+          .filter((m) => m.layer === layer)
+          .sort((a, b) => b.loc - a.loc);
+        const share = totalLoc > 0 ? layerStat.loc / totalLoc : 0;
 
-    const handleContextMenu = (e: React.MouseEvent, layer: Layer) => {
-        e.preventDefault();
-        router.push(`/repo/${repoId}/layer/${layer.toLowerCase()}`);
-    };
+        return (
+          <button
+            key={layer}
+            onClick={() => router.push(`/repo/${repoId}/layer/${layer.toLowerCase()}`)}
+            disabled={layerStat.count === 0}
+            className="group block w-full rounded border border-[#262626] bg-[#0e0e0e] px-4 py-3 text-left transition-colors enabled:hover:border-[#3a3a3a] enabled:hover:bg-[#111] disabled:opacity-40"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-baseline gap-3">
+                <span className={`font-mono text-[11px] font-medium uppercase tracking-wider ${meta.accent}`}>
+                  {meta.label}
+                </span>
+                <span className="font-mono text-[11px] text-[#777]">
+                  {layerStat.count} files · {layerStat.loc.toLocaleString()} loc ·{" "}
+                  {(share * 100).toFixed(0)}%
+                </span>
+              </div>
+              {layerStat.count > 0 && (
+                <ChevronRight
+                  size={13}
+                  className="text-[#444] transition-colors group-hover:text-[#999]"
+                />
+              )}
+            </div>
+            <p className="mt-0.5 text-[12px] text-[#666]">{meta.tagline}</p>
 
-    return (
-        <div className="space-y-4">
-            {LAYER_ORDER.map((layer) => {
-                const layerStat = stats[layer] || { count: 0, loc: 0 };
-                const layerModules = modules.filter((m) => m.layer === layer);
+            {/* proportional LOC bar */}
+            <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-[#1a1a1a]">
+              <div
+                className={`h-full rounded-full ${meta.bar}`}
+                style={{ width: `${Math.max(share * 100, layerStat.count > 0 ? 1 : 0)}%` }}
+              />
+            </div>
 
-                // Hide empty layers? Or show empty state?
-                // Show all to consistent stack
-
-                return (
-                    <div
-                        key={layer}
-                        className={cn(
-                            "group relative overflow-hidden rounded-lg border-l-4 p-4 transition-all hover:shadow-md cursor-pointer bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800",
-                            LAYER_COLORS[layer].replace('bg-', 'border-l-') // simplistic color mapping
-                        )}
-                        onClick={() => handleLayerClick(layer)}
-                        onContextMenu={(e) => handleContextMenu(e, layer)}
-                    >
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                                <Badge variant="outline" className={cn("font-bold px-2 py-0.5 uppercase text-xs", LAYER_COLORS[layer])}>
-                                    {layer}
-                                </Badge>
-                                <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                                    {layerStat.count} files · {layerStat.loc} LOC
-                                </span>
-                            </div>
-                            <ChevronRight className="h-4 w-4 text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                            {layerModules.length > 0 ? (
-                                layerModules.map((mod) => (
-                                    <div
-                                        key={mod.id}
-                                        className="px-3 py-1.5 rounded-md bg-neutral-100 dark:bg-neutral-800 text-sm font-medium border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-200 dark:hover:bg-neutral-700 flex items-center gap-2"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            // Navigate to module?
-                                        }}
-                                    >
-                                        <Layers className="h-3 w-3 text-neutral-500" />
-                                        {mod.name}
-                                        <span className="text-xs text-neutral-400 font-mono">{mod.loc}</span>
-                                    </div>
-                                ))
-                            ) : (
-                                <span className="text-xs text-neutral-400 italic">No explicit modules</span>
-                            )}
-                        </div>
-                    </div>
-                );
-            })}
-        </div >
-    );
+            {layerModules.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {layerModules.slice(0, 10).map((mod) => (
+                  <span
+                    key={mod.id}
+                    className="rounded border border-[#262626] bg-[#141414] px-1.5 py-px font-mono text-[11px] text-[#999]"
+                  >
+                    {mod.name} <span className="text-[#555]">{mod.loc.toLocaleString()}</span>
+                  </span>
+                ))}
+                {layerModules.length > 10 && (
+                  <span className="px-1 py-px font-mono text-[11px] text-[#555]">
+                    +{layerModules.length - 10} more
+                  </span>
+                )}
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

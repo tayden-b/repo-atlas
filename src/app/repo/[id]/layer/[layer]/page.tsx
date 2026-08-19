@@ -1,224 +1,229 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { ArrowLeft, FileCode, ExternalLink, Info } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { useParams } from "next/navigation";
+import Link from "next/link";
+import { clsx } from "clsx";
+import { ArrowLeft, ExternalLink } from "lucide-react";
+import { Layer } from "@/lib/analysis/types";
+import { LAYER_META } from "@/lib/layers";
+
+interface FileRow {
+  id: string;
+  path: string;
+  loc: number;
+  confidence: number;
+  signals: string;
+  moduleName: string | null;
+  subcategory: string | null;
+}
+
+interface RepoInfo {
+  id: string;
+  repoUrl: string;
+  defaultBranch: string;
+  owner: string;
+  name: string;
+}
+
+interface Signal {
+  rule: string;
+  strength: number;
+}
+
+function FilterChips({
+  label,
+  options,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  options: string[];
+  selected: string | null;
+  onSelect: (value: string | null) => void;
+}) {
+  if (options.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 font-mono text-[11px] text-[#666]">{label}</span>
+      <button
+        onClick={() => onSelect(null)}
+        className={clsx(
+          "rounded border px-2 py-px font-mono text-[11px] transition-colors",
+          selected === null
+            ? "border-[#555] bg-[#1c1c1c] text-[#ededed]"
+            : "border-[#2a2a2a] text-[#888] hover:border-[#444] hover:text-[#bbb]",
+        )}
+      >
+        all
+      </button>
+      {options.map((opt) => (
+        <button
+          key={opt}
+          onClick={() => onSelect(opt === selected ? null : opt)}
+          className={clsx(
+            "rounded border px-2 py-px font-mono text-[11px] transition-colors",
+            selected === opt
+              ? "border-[#555] bg-[#1c1c1c] text-[#ededed]"
+              : "border-[#2a2a2a] text-[#888] hover:border-[#444] hover:text-[#bbb]",
+          )}
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export default function LayerPage() {
-    const { id, layer } = useParams();
-    const router = useRouter();
-    const [files, setFiles] = useState<any[]>([]);
-    const [filteredFiles, setFilteredFiles] = useState<any[]>([]);
-    const [subcats, setSubcats] = useState<string[]>([]);
-    const [modules, setModules] = useState<string[]>([]);
-    const [selectedSubcat, setSelectedSubcat] = useState<string | null>(null);
-    const [selectedModule, setSelectedModule] = useState<string | null>(null);
-    const [repo, setRepo] = useState<any>(null); // Need repo for URL/Branch
-    const [selectedFile, setSelectedFile] = useState<any>(null);
-    const [fileContent, setFileContent] = useState("");
-    const [loading, setLoading] = useState(true);
+  const { id, layer } = useParams();
+  const [files, setFiles] = useState<FileRow[]>([]);
+  const [selectedSubcat, setSelectedSubcat] = useState<string | null>(null);
+  const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const [repo, setRepo] = useState<RepoInfo | null>(null);
+  const [selectedFile, setSelectedFile] = useState<FileRow | null>(null);
+  const [fileContent, setFileContent] = useState("");
+  const [loading, setLoading] = useState(true);
 
-    // Fetch Repo info
-    useEffect(() => {
-        fetch(`/api/repo/${id}`).then(res => res.json()).then(setRepo);
-    }, [id]);
+  useEffect(() => {
+    fetch(`/api/repo/${id}`)
+      .then((res) => res.json())
+      .then(setRepo)
+      .catch((err) => console.error(err));
+  }, [id]);
 
-    // Fetch Files
-    useEffect(() => {
-        fetch(`/api/repo/${id}/layer/${layer}`)
-            .then(res => res.json())
-            .then(data => {
-                setFiles(data);
-                setFilteredFiles(data);
+  useEffect(() => {
+    fetch(`/api/repo/${id}/layer/${layer}`)
+      .then((res) => res.json())
+      .then((data: FileRow[]) => {
+        setFiles(Array.isArray(data) ? data : []);
+        if (Array.isArray(data) && data.length > 0) setSelectedFile(data[0]);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [id, layer]);
 
-                // Extract Subcats
-                const sc = Array.from(new Set(data.map((f: any) => f.subcategory).filter(Boolean))) as string[];
-                setSubcats(sc);
+  const subcats = useMemo(
+    () => Array.from(new Set(files.map((f) => f.subcategory).filter((s): s is string => !!s))).sort(),
+    [files],
+  );
+  const modules = useMemo(
+    () => Array.from(new Set(files.map((f) => f.moduleName).filter((m): m is string => !!m))).sort(),
+    [files],
+  );
+  const filteredFiles = useMemo(
+    () =>
+      files.filter(
+        (f) =>
+          (!selectedSubcat || f.subcategory === selectedSubcat) &&
+          (!selectedModule || f.moduleName === selectedModule),
+      ),
+    [files, selectedSubcat, selectedModule],
+  );
 
-                // Extract Modules
-                const mods = Array.from(new Set(data.map((f: any) => f.moduleName).filter(Boolean))) as string[];
-                setModules(mods.sort());
+  // read-only source preview via raw.githubusercontent.com
+  useEffect(() => {
+    if (!selectedFile || !repo) return;
+    const rawBase = repo.repoUrl.replace("github.com", "raw.githubusercontent.com");
+    fetch(`${rawBase}/${repo.defaultBranch}/${selectedFile.path}`)
+      .then((res) => (res.ok ? res.text() : "// could not fetch content (moved or binary)"))
+      .then(setFileContent)
+      .catch(() => setFileContent("// failed to load content"));
+  }, [selectedFile, repo]);
 
-                if (data.length > 0) setSelectedFile(data[0]);
-                setLoading(false);
-            });
-    }, [id, layer]);
+  const layerKey = decodeURIComponent(layer as string).toUpperCase() as Layer;
+  const meta = LAYER_META[layerKey];
 
-    // Filter Effect
-    useEffect(() => {
-        let filtered = files;
+  if (loading) {
+    return <div className="py-20 text-center font-mono text-[12px] text-[#666]">loading…</div>;
+  }
 
-        // Apply subcategory filter
-        if (selectedSubcat) {
-            filtered = filtered.filter(f => f.subcategory === selectedSubcat);
-        }
-
-        // Apply module filter
-        if (selectedModule) {
-            filtered = filtered.filter(f => f.moduleName === selectedModule);
-        }
-
-        setFilteredFiles(filtered);
-    }, [selectedSubcat, selectedModule, files]);
-
-    // Fetch Content
-    useEffect(() => {
-        if (!selectedFile || !repo) return;
-
-        // Construct Raw URL
-        // repo.repoUrl: https://github.com/owner/name
-        // raw: https://raw.githubusercontent.com/owner/name/branch/path
-        const rawBase = repo.repoUrl.replace("github.com", "raw.githubusercontent.com");
-        const url = `${rawBase}/${repo.defaultBranch}/${selectedFile.path}`;
-
-        fetch(url)
-            .then(res => {
-                if (res.ok) return res.text();
-                return "Error fetching content (might be private or binary)";
-            })
-            .then(setFileContent)
-            .catch(() => setFileContent("Failed to load content"));
-
-    }, [selectedFile, repo]);
-
-    const decodedLayer = decodeURIComponent(layer as string).toUpperCase();
-
-    if (loading) return <div className="p-12">Loading layer data...</div>;
-
-    return (
-        <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-950">
-            {/* Header */}
-            <div className="border-b bg-white dark:bg-neutral-900 px-6 py-4 flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <Button variant="ghost" size="sm" onClick={() => router.push(`/repo/${id}`)}>
-                            <ArrowLeft className="mr-2 h-4 w-4" /> Back
-                        </Button>
-                        <div>
-                            <h1 className="text-xl font-bold flex items-center gap-2">
-                                {decodedLayer} Layer
-                                <Badge variant="secondary">{files.length} files</Badge>
-                            </h1>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Subcategory Filters */}
-                {subcats.length > 0 && (
-                    <div className="space-y-2">
-                        <div className="text-xs text-neutral-500 font-medium">Filter by Type:</div>
-                        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                            <Badge
-                                variant={selectedSubcat === null ? "default" : "outline"}
-                                className="cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => setSelectedSubcat(null)}
-                            >
-                                All
-                            </Badge>
-                            {subcats.sort().map(sc => (
-                                <Badge
-                                    key={sc}
-                                    variant={selectedSubcat === sc ? "default" : "outline"}
-                                    className="cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={() => setSelectedSubcat(sc)}
-                                >
-                                    {sc}
-                                </Badge>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Module Filters */}
-                {modules.length > 0 && (
-                    <div className="space-y-2">
-                        <div className="text-xs text-neutral-500 font-medium">Filter by Module:</div>
-                        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                            <Badge
-                                variant={selectedModule === null ? "default" : "outline"}
-                                className="cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => setSelectedModule(null)}
-                            >
-                                All
-                            </Badge>
-                            {modules.map(mod => (
-                                <Badge
-                                    key={mod}
-                                    variant={selectedModule === mod ? "default" : "outline"}
-                                    className="cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={() => setSelectedModule(mod)}
-                                >
-                                    {mod}
-                                </Badge>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 flex overflow-hidden min-h-0">
-                {/* Sidebar File List */}
-                <div className="w-1/3 border-r bg-white dark:bg-neutral-900 flex flex-col h-full overflow-hidden">
-                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                        {filteredFiles.map(f => (
-                            <div
-                                key={f.id}
-                                className={`p-3 rounded-md cursor-pointer border hover:border-blue-400 transition-colors ${selectedFile?.id === f.id ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20' : 'border-transparent'}`}
-                                onClick={() => setSelectedFile(f)}
-                            >
-                                <div className="flex items-center gap-2 font-medium text-sm text-neutral-800 dark:text-neutral-200 break-all">
-                                    <FileCode className="h-4 w-4 text-neutral-500" />
-                                    {f.path}
-                                </div>
-                                <div className="flex items-center gap-2 mt-2 text-xs text-neutral-500">
-                                    <Badge variant="outline" className="text-[10px] px-1 py-0">{f.moduleName || 'root'}</Badge>
-                                    <span>{f.loc} LOC</span>
-                                    <span>{(f.confidence * 100).toFixed(0)}% Conf</span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Main Code View */}
-                <div className="w-2/3 flex flex-col bg-neutral-50 dark:bg-neutral-950">
-                    {selectedFile ? (
-                        <>
-                            <div className="p-4 border-b flex items-start justify-between bg-white dark:bg-neutral-900">
-                                <div>
-                                    <h2 className="font-semibold text-lg">{selectedFile.path}</h2>
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                        {JSON.parse(selectedFile.signals).map((s: any, i: number) => (
-                                            <span key={i} className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full flex items-center gap-1">
-                                                <Info className="h-3 w-3" /> {s.description}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                                <Button variant="outline" size="sm" asChild>
-                                    <a href={`${repo?.repoUrl}/blob/${repo?.defaultBranch}/${selectedFile.path}`} target="_blank" rel="noopener noreferrer">
-                                        <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                </Button>
-                            </div>
-                            <div className="flex-1 p-4 overflow-y-auto">
-                                <pre className="text-sm font-mono bg-white dark:bg-neutral-900 p-4 rounded-md border overflow-x-auto">
-                                    <code>{fileContent}</code>
-                                </pre>
-                            </div>
-                        </>
-                    ) : (
-                        <div className="flex-1 flex items-center justify-center text-neutral-400">
-                            Select a file to view content
-                        </div>
-                    )}
-                </div>
-            </div>
+  return (
+    <main className="mx-auto flex h-[calc(100vh-3rem)] max-w-7xl flex-col px-4 py-4">
+      <div className="mb-3 space-y-2">
+        <Link
+          href={`/repo/${id}`}
+          className="inline-flex items-center gap-1 font-mono text-[11px] text-[#777] transition-colors hover:text-[#ddd]"
+        >
+          <ArrowLeft size={11} /> {repo ? `${repo.owner}/${repo.name}` : "back"}
+        </Link>
+        <div className="flex items-baseline gap-3">
+          <h1 className={clsx("font-mono text-[13px] font-medium uppercase tracking-wider", meta?.accent)}>
+            {meta?.label ?? layerKey}
+          </h1>
+          <span className="font-mono text-[11px] text-[#777]">
+            {filteredFiles.length} of {files.length} files
+          </span>
         </div>
-    );
+        <FilterChips label="type" options={subcats} selected={selectedSubcat} onSelect={setSelectedSubcat} />
+        <FilterChips label="module" options={modules} selected={selectedModule} onSelect={setSelectedModule} />
+      </div>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded border border-[#262626]">
+        {/* file list */}
+        <div className="pane-scroll w-2/5 overflow-y-auto border-r border-[#262626] bg-[#0e0e0e] lg:w-1/3">
+          {filteredFiles.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setSelectedFile(f)}
+              className={clsx(
+                "block w-full border-b border-[#1a1a1a] px-3 py-2 text-left transition-colors last:border-0",
+                selectedFile?.id === f.id ? "bg-[#161616]" : "hover:bg-[#111]",
+              )}
+            >
+              <div className="break-all font-mono text-[12px] text-[#ddd]">{f.path}</div>
+              <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-[#666]">
+                {f.moduleName && <span>{f.moduleName}</span>}
+                <span>{f.loc} loc</span>
+                <span>conf {(f.confidence * 100).toFixed(0)}%</span>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* source preview */}
+        <div className="flex min-w-0 flex-1 flex-col bg-[#0a0a0a]">
+          {selectedFile ? (
+            <>
+              <div className="flex items-start justify-between gap-3 border-b border-[#262626] bg-[#0e0e0e] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="break-all font-mono text-[12px] font-medium text-[#ededed]">
+                    {selectedFile.path}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {(JSON.parse(selectedFile.signals) as Signal[]).map((s, i) => (
+                      <span
+                        key={i}
+                        className={clsx("rounded border px-1.5 py-px font-mono text-[10px]", meta?.chip)}
+                        title={`score ${s.strength}`}
+                      >
+                        {s.rule}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {repo && (
+                  <a
+                    href={`${repo.repoUrl}/blob/${repo.defaultBranch}/${selectedFile.path}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 rounded border border-[#333] p-1.5 text-[#888] transition-colors hover:border-[#555] hover:text-[#ddd]"
+                  >
+                    <ExternalLink size={12} />
+                  </a>
+                )}
+              </div>
+              <pre className="pane-scroll flex-1 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-[#a0a6ad]">
+                <code>{fileContent}</code>
+              </pre>
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-[#555]">
+              select a file
+            </div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
 }
