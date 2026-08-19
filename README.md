@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Repo Atlas
 
-## Getting Started
+Paste a public GitHub repo, get its architecture: every file classified into five layers — presentation, application, domain, infrastructure, tooling — with per-layer drill-down, a read-only source viewer, and a Markdown report export.
 
-First, run the development server:
+![Repo view: layer stack for expressjs/express](docs/repo-view.png)
+
+## How classification works
+
+No LLM involved — a scored rule engine ([`src/lib/analysis/classifier.ts`](src/lib/analysis/classifier.ts)) evaluates ~40 weighted rules against each file's **path** (`/services/`, `page.tsx`, `Dockerfile`), **extension** (`.tsx`, `.sql`, `.tf`), and **content** (a 50-line snippet checked for signatures like `createSlice`, `@Controller`, `describe(`). The highest-scoring layer wins; the score becomes a confidence value, and every matched rule is stored as a signal you can inspect per file in the UI.
+
+| Layer | What lands there |
+|---|---|
+| `PRESENTATION` | UI components, API routes, CLI commands |
+| `APPLICATION` | services, state management, jobs/workers |
+| `DOMAIN` | models, types, pure utilities, config constants |
+| `INFRASTRUCTURE` | database access, adapters, external clients |
+| `TOOLING` | tests, build config, CI, docs |
+
+Files also get grouped into inferred modules (with passthrough roots like `src/` and `lib/` skipped), so the layer stack reads as `agents/application · 456 loc` rather than a flat file list.
+
+![Layer drill-down with source viewer](docs/layer-view.png)
+
+## The fetch path
+
+An analysis costs **two GitHub API requests** regardless of repo size: one for metadata, one for the tarball. The archive is gunzipped and walked as raw ustar blocks in memory (~40 lines, no tar dependency), which keeps it inside serverless time limits and makes the unauthenticated rate limit a non-issue. Earlier versions fetched files one API call each — that approach is in the git history as a cautionary tale.
+
+Guardrails: 2,000 files max per analysis, 200KB per file, 80MB per archive, binary content skipped. Re-analyzing a URL replaces the previous run instead of stacking duplicates.
+
+## Running it
 
 ```bash
+npm install
+npx prisma db push     # creates the local SQLite db
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Env var | Purpose |
+|---|---|
+| `DATABASE_URL` | `file:./dev.db` locally; a `libsql://` Turso URL in production |
+| `DATABASE_AUTH_TOKEN` | Turso auth token (production only) |
+| `GITHUB_TOKEN` | optional — raises the GitHub API rate limit |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js (App Router) · TypeScript · Prisma on SQLite/Turso (libSQL) · Tailwind. Deploys on Vercel.
